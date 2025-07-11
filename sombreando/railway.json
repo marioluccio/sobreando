@@ -1,0 +1,33 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "backend/Dockerfile"
+  },
+  "deploy": {
+    "startCommand": "gunicorn --bind 0.0.0.0:$PORT --workers 3 --timeout 120 sombreando.wsgi:application",
+    "healthcheckPath": "/api/v1/health/",
+    "healthcheckTimeout": 100,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "DJANGO_SETTINGS_MODULE": "sombreando.settings.production",
+        "DEBUG": "False",
+        "ALLOWED_HOSTS": "$RAILWAY_PUBLIC_DOMAIN,sombreando.com,www.sombreando.com",
+        "CORS_ALLOWED_ORIGINS": "https://$RAILWAY_PUBLIC_DOMAIN,https://sombreando.com,https://www.sombreando.com"
+      }
+    },
+    "staging": {
+      "variables": {
+        "DJANGO_SETTINGS_MODULE": "sombreando.settings.production",
+        "DEBUG": "False",
+        "ALLOWED_HOSTS": "$RAILWAY_PUBLIC_DOMAIN",
+        "CORS_ALLOWED_ORIGINS": "https://$RAILWAY_PUBLIC_DOMAIN"
+      }
+    }
+  }
+}
+

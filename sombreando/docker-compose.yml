@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: sombreando_db
+    environment:
+      POSTGRES_DB: sombreando_dev
+      POSTGRES_USER: sombreando
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - sombreando_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sombreando -d sombreando_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: sombreando_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - sombreando_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Django Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sombreando_backend
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://sombreando:password@db:5432/sombreando_dev
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=sombreando.settings.local
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sombreando_network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: sombreando_nginx
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - sombreando_network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker (for background tasks)
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sombreando_celery
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://sombreando:password@db:5432/sombreando_dev
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=sombreando.settings.local
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sombreando_network
+    command: celery -A sombreando worker -l info
+    healthcheck:
+      test: ["CMD", "celery", "-A", "sombreando", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Beat (for scheduled tasks)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sombreando_celery_beat
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://sombreando:password@db:5432/sombreando_dev
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=sombreando.settings.local
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sombreando_network
+    command: celery -A sombreando beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  media_data:
+    driver: local
+  static_data:
+    driver: local
+
+networks:
+  sombreando_network:
+    driver: bridge
+
